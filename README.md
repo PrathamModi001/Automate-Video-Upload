@@ -52,10 +52,9 @@ BUNNY_API_KEY=your-bunny-api-key
 BUNNY_TUS_ENDPOINT=https://video.bunnycdn.com/tusupload
 IS_BUNNY_ENABLED=true
 
-# 100ms
-HUNDREDMS_API_KEY=your-100ms-api-key
-HUNDREDMS_WORKSPACE_ID=your-workspace-id
-HUNDREDMS_RECORDING_API_URL=https://api.100ms.live/v2
+# Main Backend Configuration
+MAIN_BACKEND_URL=http://localhost:3000
+HEADERSAPIKEY=your-headers-api-key-here
 
 # Upload Configuration
 MAX_CONCURRENT_UPLOADS=3
