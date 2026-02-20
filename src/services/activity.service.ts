@@ -7,6 +7,7 @@ import { Activity } from "../models";
  * - details.isUploaded: false
  * - details.roomId: exists
  * - isDeleted: false
+ * - endTime: in the past (session has ended)
  */
 export const getPendingUploadActivities = async () => {
     try {
@@ -15,6 +16,7 @@ export const getPendingUploadActivities = async () => {
             "details.isUploaded": false,
             "details.roomId": { $exists: true },
             isDeleted: false,
+            endTime: { $lt: new Date() }, // Only completed sessions (endTime in the past)
         })
             .populate("courseId", "title collection_id")
             .sort({ createdAt: 1 }) // Oldest first
@@ -100,6 +102,7 @@ export const countPendingUploads = async (): Promise<number> => {
             "details.isUploaded": false,
             "details.roomId": { $exists: true },
             isDeleted: false,
+            endTime: { $lt: new Date() }, // Only completed sessions
         });
 
         return count;
