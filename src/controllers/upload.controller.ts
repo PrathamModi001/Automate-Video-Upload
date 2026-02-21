@@ -58,7 +58,8 @@ export const uploadVideoByActivityId = catchAsync(async (req: Request, res: Resp
 
         // Step 4: Download video to NEW server's local storage
         console.log(`\n⬇️  Step 4: Downloading video to NEW server...`);
-        localFilePath = await downloadVideo(recordingUrl, activityId);
+        const fileName = `${activityId}_${Date.now()}.mp4`;
+        localFilePath = await downloadVideo(recordingUrl, fileName);
         const fileSizeMB = getFileSizeMB(localFilePath);
         console.log(`   ✅ Video downloaded: ${fileSizeMB.toFixed(2)} MB`);
 

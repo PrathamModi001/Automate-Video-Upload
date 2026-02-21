@@ -1,12 +1,12 @@
+// Load environment variables FIRST (before any other imports)
 import dotenv from "dotenv";
+dotenv.config();
+
 import express from "express";
 import { connectDatabase } from "./config/database";
 import { globalErrorHandler } from "./middleware/errorHandler";
 import activityRoutes from "./routes/activity.routes";
 import uploadRoutes from "./routes/upload.routes";
-
-// Load environment variables
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -38,6 +38,7 @@ app.get("/", (req, res) => {
         endpoints: {
             health: "GET /health",
             pendingUploads: "GET /api/activities/pending-uploads",
+            downloadVideo: "POST /api/activities/:activityId/download",
             uploadActivity: "POST /api/upload/activity/:activityId",
             processNext: "POST /api/upload/process-next",
         },
@@ -55,15 +56,21 @@ const startServer = async () => {
 
         // Start server
         app.listen(PORT, () => {
+            const uploadDir = process.env.TEMP_UPLOAD_DIR
+                ? require("path").resolve(process.env.TEMP_UPLOAD_DIR)
+                : require("path").join(process.cwd(), "uploads");
+
             console.log(`\n${"=".repeat(80)}`);
             console.log(`🚀 Video Upload Server started successfully`);
             console.log(`   Port: ${PORT}`);
             console.log(`   Environment: ${process.env.NODE_ENV}`);
             console.log(`   MongoDB: Connected`);
             console.log(`   Bunny Stream: ${process.env.IS_BUNNY_ENABLED === "true" ? "Enabled" : "Disabled"}`);
+            console.log(`   📁 Upload Directory: ${uploadDir}`);
             console.log(`\n📡 API Endpoints:`);
             console.log(`   Health Check:     http://localhost:${PORT}/health`);
             console.log(`   Pending Uploads:  http://localhost:${PORT}/api/activities/pending-uploads`);
+            console.log(`   Download Video:   http://localhost:${PORT}/api/activities/:activityId/download`);
             console.log(`   Upload Activity:  http://localhost:${PORT}/api/upload/activity/:activityId`);
             console.log(`   Process Next:     http://localhost:${PORT}/api/upload/process-next`);
             console.log(`${"=".repeat(80)}\n`);

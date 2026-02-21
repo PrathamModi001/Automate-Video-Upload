@@ -8,22 +8,26 @@ const pipeline = promisify(stream.pipeline);
 
 const MAIN_BACKEND_URL = process.env.MAIN_BACKEND_URL || "http://localhost:3000";
 const HEADERSAPIKEY = process.env.HEADERSAPIKEY || "";
-const UPLOAD_DIR = process.env.TEMP_UPLOAD_DIR || "./uploads";
+// Use absolute path: E:\LMS\video-upload-server\uploads
+const UPLOAD_DIR = process.env.TEMP_UPLOAD_DIR
+    ? path.resolve(process.env.TEMP_UPLOAD_DIR)
+    : path.join(process.cwd(), "uploads");
 const DOWNLOAD_TIMEOUT = parseInt(process.env.DOWNLOAD_TIMEOUT || "600000"); // 10 min default
 
 /**
- * Get recording download URL from main backend
+ * Get all recording videos from main backend
  * Calls: GET /v1/100ms/recordings/activity/:activityId/videos
+ * Returns full response with all videos
  */
-export const getRecordingUrl = async (activityId: string): Promise<string> => {
+export const getRecordingVideos = async (activityId: string): Promise<any> => {
     try {
-        console.log(`📹 Fetching recording URL for activity: ${activityId}`);
+        console.log(`📹 Fetching recording videos for activity: ${activityId}`);
 
         const response = await axios.get(
             `${MAIN_BACKEND_URL}/v1/100ms/recordings/activity/${activityId}/videos`,
             {
                 headers: {
-                    headersapikey: HEADERSAPIKEY,
+                    "x-api-key": HEADERSAPIKEY,
                 },
                 timeout: 30000, // 30 seconds for API call
             }
@@ -33,14 +37,8 @@ export const getRecordingUrl = async (activityId: string): Promise<string> => {
             throw new Error("No recording videos found for this activity");
         }
 
-        const downloadUrl = response.data.videos[0]?.downloadUrl;
-
-        if (!downloadUrl) {
-            throw new Error("Download URL not available in response");
-        }
-
-        console.log(`✅ Got recording URL for activity ${activityId}`);
-        return downloadUrl;
+        console.log(`✅ Got ${response.data.videos.length} video(s) for activity ${activityId}`);
+        return response.data;
     } catch (error: any) {
         if (error.response?.status === 401) {
             throw new Error(
@@ -50,17 +48,35 @@ export const getRecordingUrl = async (activityId: string): Promise<string> => {
         if (error.response?.status === 404) {
             throw new Error("Activity not found or no recording available yet");
         }
-        console.error(`❌ Failed to get recording URL:`, error.message);
-        throw new Error(`Failed to get recording URL: ${error.message}`);
+        console.error(`❌ Failed to get recording videos:`, error.message);
+        throw new Error(`Failed to get recording videos: ${error.message}`);
     }
 };
 
 /**
+ * Get recording URL for first video (backward compatibility)
+ * Used by upload.controller.ts for single-video upload flow
+ * Returns just the download URL string
+ */
+export const getRecordingUrl = async (activityId: string): Promise<string> => {
+    const videosData = await getRecordingVideos(activityId);
+
+    if (!videosData.videos || videosData.videos.length === 0) {
+        throw new Error("No videos found for this activity");
+    }
+
+    // Return first video's download URL
+    return videosData.videos[0].downloadUrl;
+};
+
+/**
  * Download video from presigned URL to NEW server's local storage
+ * @param downloadUrl - Presigned URL from 100ms
+ * @param fileName - Custom filename (should include activityId)
  */
 export const downloadVideo = async (
     downloadUrl: string,
-    activityId: string
+    fileName: string
 ): Promise<string> => {
     try {
         // Ensure upload directory exists
@@ -69,7 +85,6 @@ export const downloadVideo = async (
             console.log(`📁 Created upload directory: ${UPLOAD_DIR}`);
         }
 
-        const fileName = `${activityId}_${Date.now()}.mp4`;
         const filePath = path.join(UPLOAD_DIR, fileName);
 
         console.log(`⬇️  Downloading video to: ${filePath}`);

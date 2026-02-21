@@ -4,6 +4,7 @@ import { Activity } from "../models";
  * Get all activities with pending uploads
  * Criteria:
  * - type: "live_session"
+ * - details.isRecordingAvailable: true (recording exists in 100ms)
  * - details.isUploaded: false
  * - details.roomId: exists
  * - isDeleted: false
@@ -13,6 +14,7 @@ export const getPendingUploadActivities = async () => {
     try {
         const activities = await Activity.find({
             type: "live_session",
+            "details.isRecordingAvailable": true, // Only activities with recordings
             "details.isUploaded": false,
             "details.roomId": { $exists: true },
             isDeleted: false,
@@ -99,6 +101,7 @@ export const countPendingUploads = async (): Promise<number> => {
     try {
         const count = await Activity.countDocuments({
             type: "live_session",
+            "details.isRecordingAvailable": true,
             "details.isUploaded": false,
             "details.roomId": { $exists: true },
             isDeleted: false,
@@ -109,5 +112,83 @@ export const countPendingUploads = async (): Promise<number> => {
     } catch (error: any) {
         console.error("❌ Error counting pending uploads:", error);
         return 0;
+    }
+};
+
+/**
+ * Update activity with local file path and download status
+ */
+export const updateActivityWithLocalPath = async (
+    activityId: string,
+    status: string,
+    localFilePath: string | null
+) => {
+    try {
+        const updateData: any = {
+            "details.uploadStatus": status,
+            "details.lastUploadAttempt": new Date(),
+            $inc: { "details.uploadAttempts": 1 },
+        };
+
+        if (status === "downloaded" && localFilePath) {
+            updateData["details.localFilePath"] = localFilePath;
+        }
+
+        const activity = await Activity.findByIdAndUpdate(activityId, updateData, {
+            new: true,
+        });
+
+        if (!activity) {
+            throw new Error(`Activity ${activityId} not found`);
+        }
+
+        console.log(`✅ Updated activity ${activityId} status: ${status}`);
+        return activity;
+    } catch (error: any) {
+        console.error(`❌ Error updating activity ${activityId}:`, error);
+        throw error;
+    }
+};
+
+/**
+ * Update activity with multiple videos array and download status
+ * Used when an activity has multiple sessions or multiple videos per session
+ */
+export const updateActivityWithVideos = async (
+    activityId: string,
+    status: string,
+    videos: Array<{
+        sessionId: string;
+        assetId: string;
+        localFilePath: string;
+        duration: number;
+        size: number;
+        downloadedAt: Date;
+    }>
+) => {
+    try {
+        const updateData: any = {
+            "details.uploadStatus": status,
+            "details.lastUploadAttempt": new Date(),
+            $inc: { "details.uploadAttempts": 1 },
+        };
+
+        if (status === "downloaded" && videos && videos.length > 0) {
+            updateData["details.videos"] = videos;
+        }
+
+        const activity = await Activity.findByIdAndUpdate(activityId, updateData, {
+            new: true,
+        });
+
+        if (!activity) {
+            throw new Error(`Activity ${activityId} not found`);
+        }
+
+        console.log(`✅ Updated activity ${activityId} status: ${status} with ${videos.length} video(s)`);
+        return activity;
+    } catch (error: any) {
+        console.error(`❌ Error updating activity ${activityId}:`, error);
+        throw error;
     }
 };
