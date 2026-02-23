@@ -15,7 +15,7 @@ export const getPendingUploadActivities = async () => {
         const activities = await Activity.find({
             type: "live_session",
             "details.isRecordingAvailable": true, // Only activities with recordings
-            "details.isUploaded": false,
+            "details.isUploaded": { $ne: true }, // Not uploaded (includes false and undefined)
             "details.roomId": { $exists: true },
             isDeleted: false,
             endTime: { $lt: new Date() }, // Only completed sessions (endTime in the past)

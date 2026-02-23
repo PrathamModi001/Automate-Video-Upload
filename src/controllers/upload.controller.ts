@@ -285,6 +285,7 @@ export const uploadVideoByActivityId = catchAsync(async (req: Request, res: Resp
 /**
  * Process next pending upload (one at a time)
  * POST /api/upload/process-next
+ * Automatically downloads videos first if needed, then uploads to Bunny
  */
 export const processNextPendingUpload = catchAsync(async (req: Request, res: Response) => {
     console.log(`\n🔍 Finding next pending upload...`);
@@ -305,15 +306,50 @@ export const processNextPendingUpload = catchAsync(async (req: Request, res: Res
     console.log(`   Found activity: ${activity.title} (${activity._id})`);
     console.log(`   Remaining after this: ${remainingAfter}`);
 
-    // Process this activity (reuse the upload function)
     const activityId = activity._id.toString();
 
-    // Create mock request object
-    const mockReq = { params: { activityId } } as any;
+    // Step 1: Check if videos are downloaded
+    const needsDownload = !activity.details?.videos || activity.details.videos.length === 0;
 
-    // Create custom response handler
+    if (needsDownload) {
+        console.log(`   📥 Videos not downloaded yet - downloading first...`);
+
+        // Import download controller
+        const { downloadActivityVideo } = require("./activity.controller");
+
+        // Create mock request/response for download
+        const downloadReq = { params: { activityId } } as any;
+        let downloadResult: any = null;
+        const downloadRes = {
+            status: (code: number) => ({
+                json: (data: any) => {
+                    downloadResult = { statusCode: code, ...data };
+                },
+            }),
+        } as Response;
+
+        const mockNext = (err?: any) => {
+            if (err) throw err;
+        };
+
+        await downloadActivityVideo(downloadReq, downloadRes, mockNext as any);
+
+        if (!downloadResult?.success) {
+            console.log(`   ❌ Download failed - skipping upload`);
+            throw badRequest("Failed to download videos");
+        }
+
+        console.log(`   ✅ Downloaded ${downloadResult.data.videoCount} video(s)`);
+    } else {
+        console.log(`   ✅ Videos already downloaded (${activity.details.videos.length} video(s))`);
+    }
+
+    // Step 2: Upload to Bunny Stream
+    console.log(`   ☁️  Uploading to Bunny Stream...`);
+
+    const uploadReq = { params: { activityId } } as any;
     let uploadResult: any = null;
-    const mockRes = {
+    const uploadRes = {
         status: (code: number) => ({
             json: (data: any) => {
                 uploadResult = { statusCode: code, ...data };
@@ -321,11 +357,11 @@ export const processNextPendingUpload = catchAsync(async (req: Request, res: Res
         }),
     } as Response;
 
-    // Call the upload function (catchAsync expects 3 params: req, res, next)
     const mockNext = (err?: any) => {
         if (err) throw err;
     };
-    await uploadVideoByActivityId(mockReq, mockRes, mockNext as any);
+
+    await uploadVideoByActivityId(uploadReq, uploadRes, mockNext as any);
 
     // Return the result
     if (uploadResult?.success) {

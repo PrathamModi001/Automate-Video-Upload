@@ -7,6 +7,7 @@ import { connectDatabase } from "./config/database";
 import { globalErrorHandler } from "./middleware/errorHandler";
 import activityRoutes from "./routes/activity.routes";
 import uploadRoutes from "./routes/upload.routes";
+import { startAutoProcessor } from "./services/autoProcessor.service";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -74,6 +75,13 @@ const startServer = async () => {
             console.log(`   Upload Activity:  http://localhost:${PORT}/api/upload/activity/:activityId`);
             console.log(`   Process Next:     http://localhost:${PORT}/api/upload/process-next`);
             console.log(`${"=".repeat(80)}\n`);
+
+            // Start auto-processor if enabled
+            if (process.env.AUTO_PROCESS === "true") {
+                startAutoProcessor();
+            } else {
+                console.log(`ℹ️  Auto-processor disabled (set AUTO_PROCESS=true to enable)\n`);
+            }
         });
     } catch (error) {
         console.error("❌ Failed to start server:", error);
