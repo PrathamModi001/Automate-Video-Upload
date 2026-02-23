@@ -11,21 +11,23 @@ import { getRecordingUrl, downloadVideo, deleteLocalFile, getFileSizeMB } from "
 import { uploadToBunnyStream } from "../services/upload.service";
 
 /**
- * Upload video for a specific activity
+ * Upload all videos for a specific activity to Bunny Stream
  * POST /api/upload/activity/:activityId
+ * Expects videos to be already downloaded (details.videos array populated)
  */
 export const uploadVideoByActivityId = catchAsync(async (req: Request, res: Response) => {
     const activityId = Array.isArray(req.params.activityId)
         ? req.params.activityId[0]
         : req.params.activityId;
-    let localFilePath: string | null = null;
     const startTime = Date.now();
+    const uploadedVideos: any[] = [];
+    const failedVideos: any[] = [];
+
+    console.log(`\n${"=".repeat(80)}`);
+    console.log(`☁️  UPLOADING VIDEOS TO BUNNY STREAM: ${activityId}`);
+    console.log(`${"=".repeat(80)}\n`);
 
     try {
-        console.log(`\n${"=".repeat(80)}`);
-        console.log(`🎬 STARTING UPLOAD FOR ACTIVITY: ${activityId}`);
-        console.log(`${"=".repeat(80)}\n`);
-
         // Step 1: Get activity details
         console.log(`📋 Step 1: Fetching activity details...`);
         const activity: any = await getActivityById(activityId);
@@ -34,9 +36,24 @@ export const uploadVideoByActivityId = catchAsync(async (req: Request, res: Resp
         if (activity.isDeleted) throw badRequest("Activity is deleted");
         if (activity.type !== "live_session") throw badRequest("Activity is not a live session");
         if (!activity.details?.roomId) throw badRequest("Activity has no 100ms room ID");
-        if (activity.details?.isUploaded) {
-            throw badRequest("Video already uploaded to Bunny Stream", {
-                bunnyVideoId: activity.details.videoId,
+
+        if (!activity.details?.videos || activity.details.videos.length === 0) {
+            throw badRequest("No videos downloaded yet. Please download videos first.");
+        }
+
+        // Check if already uploaded
+        const allUploaded = activity.details.videos.every((v: any) => v.bunnyVideoId);
+        if (allUploaded && activity.details?.isUploaded) {
+            console.log(`ℹ️  All videos already uploaded to Bunny Stream`);
+            return sendResponse(res, {
+                message: "All videos already uploaded to Bunny Stream",
+                data: {
+                    activityId,
+                    activityTitle: activity.title,
+                    videoCount: activity.details.videos.length,
+                    videos: activity.details.videos,
+                    alreadyUploaded: true,
+                },
             });
         }
 
@@ -44,81 +61,221 @@ export const uploadVideoByActivityId = catchAsync(async (req: Request, res: Resp
         if (!courseData?.collection_id) throw badRequest("Course has no Bunny Stream collection ID");
 
         console.log(`   ✅ Activity: ${activity.title}`);
-        console.log(`   ✅ Course: ${courseData.title}`);
-        console.log(`   ✅ Collection ID: ${courseData.collection_id}`);
+        console.log(`   ✅ Videos to upload: ${activity.details.videos.length}`);
 
-        // Step 2: Update status to downloading
-        console.log(`\n📥 Step 2: Updating status to 'downloading'...`);
-        await updateActivityUploadStatus(activityId, "downloading");
+        // Step 3: Upload each video to Bunny Stream
+        console.log(`\n${"=".repeat(80)}`);
+        console.log(`☁️  Step 3: Uploading ${activity.details.videos.length} video(s) to Bunny Stream`);
+        console.log(`${"=".repeat(80)}\n`);
 
-        // Step 3: Get recording URL from main backend
-        console.log(`\n🔗 Step 3: Getting recording URL from 100ms...`);
-        const recordingUrl = await getRecordingUrl(activityId);
-        console.log(`   ✅ Recording URL obtained (expires in 12 hours)`);
-
-        // Step 4: Download video to NEW server's local storage
-        console.log(`\n⬇️  Step 4: Downloading video to NEW server...`);
-        const fileName = `${activityId}_${Date.now()}.mp4`;
-        localFilePath = await downloadVideo(recordingUrl, fileName);
-        const fileSizeMB = getFileSizeMB(localFilePath);
-        console.log(`   ✅ Video downloaded: ${fileSizeMB.toFixed(2)} MB`);
-
-        // Step 5: Update status to uploading
-        console.log(`\n📤 Step 5: Updating status to 'uploading'...`);
+        console.log(`📝 Updating activity status to 'uploading'...`);
         await updateActivityUploadStatus(activityId, "uploading");
+        console.log(`   ✅ Status updated\n`);
 
-        // Step 6: Upload to Bunny Stream (creates video + uploads with TUS)
-        console.log(`\n☁️  Step 6: Uploading to Bunny Stream...`);
-        const bunnyVideoId = await uploadToBunnyStream(activity.title, localFilePath, courseData.collection_id);
+        const path = require("path");
+        const fs = require("fs");
 
-        // Step 7: Update activity with video ID and mark as uploaded
-        console.log(`\n💾 Step 7: Updating activity with Bunny Video ID...`);
-        await updateActivityUploadStatus(activityId, "completed", bunnyVideoId);
+        for (let i = 0; i < activity.details.videos.length; i++) {
+            const video = activity.details.videos[i];
+            console.log(`${"─".repeat(80)}`);
+            console.log(`📹 Video ${i + 1}/${activity.details.videos.length}`);
+            console.log(`${"─".repeat(80)}`);
+            console.log(`   Session ID: ${video.sessionId}`);
+            console.log(`   Asset ID: ${video.assetId}`);
+            console.log(`   Local Path: ${video.localFilePath}`);
+            console.log(`   Downloaded At: ${video.downloadedAt}`);
+            console.log(`   Bunny Video ID: ${video.bunnyVideoId || "NOT UPLOADED YET"}`);
 
-        // Step 8: Clean up local file
-        console.log(`\n🗑️  Step 8: Cleaning up local file...`);
-        deleteLocalFile(localFilePath);
+            // Check if already uploaded
+            if (video.bunnyVideoId) {
+                console.log(`   ℹ️  Already uploaded - skipping`);
+                uploadedVideos.push(video);
+                continue;
+            }
+
+            try {
+                console.log(`\n   🔍 Checking local file...`);
+                // Resolve absolute path
+                const localFilePath = path.isAbsolute(video.localFilePath)
+                    ? video.localFilePath
+                    : path.join(process.cwd(), video.localFilePath);
+
+                console.log(`      Original path: ${video.localFilePath}`);
+                console.log(`      Resolved path: ${localFilePath}`);
+                console.log(`      Is absolute: ${path.isAbsolute(video.localFilePath)}`);
+
+                // Check if file exists
+                console.log(`      Checking if file exists...`);
+                const fileExists = fs.existsSync(localFilePath);
+                console.log(`      File exists: ${fileExists}`);
+
+                if (!fileExists) {
+                    throw new Error(`Video file not found: ${localFilePath}`);
+                }
+
+                const fileSizeMB = getFileSizeMB(localFilePath);
+                console.log(`      File size: ${fileSizeMB.toFixed(2)} MB`);
+                console.log(`      ✅ File verified\n`);
+
+                // Upload to Bunny Stream
+                const videoTitle = `${activity.title} - Part ${i + 1}`;
+                console.log(`   ☁️  Uploading to Bunny Stream...`);
+                console.log(`      Title: ${videoTitle}`);
+                console.log(`      Collection ID: ${courseData.collection_id}`);
+                console.log(`      File path: ${localFilePath}`);
+
+                const bunnyVideoId = await uploadToBunnyStream(
+                    videoTitle,
+                    localFilePath,
+                    courseData.collection_id
+                );
+
+                console.log(`      ✅ Upload successful!`);
+                console.log(`      Bunny Video ID: ${bunnyVideoId}\n`);
+
+                // Update video record
+                console.log(`   💾 Updating video record...`);
+                video.bunnyVideoId = bunnyVideoId;
+                video.uploadedAt = new Date();
+                uploadedVideos.push(video);
+                console.log(`      ✅ Video record updated\n`);
+
+                // Delete local file after successful upload
+                console.log(`   🗑️  Deleting local file...`);
+                deleteLocalFile(localFilePath);
+                console.log(`      ✅ Local file deleted\n`);
+
+                console.log(`   ✅ Video ${i + 1} completed successfully\n`);
+            } catch (videoError: any) {
+                console.error(`\n   ❌ VIDEO ${i + 1} UPLOAD FAILED`);
+                console.error(`   Error: ${videoError.message}`);
+                console.error(`   Stack: ${videoError.stack}\n`);
+                failedVideos.push({
+                    ...video,
+                    error: videoError.message,
+                });
+            }
+        }
+
+        // Step 4: Update activity in database
+        console.log(`${"=".repeat(80)}`);
+        console.log(`💾 Step 4: Updating activity in database`);
+        console.log(`${"=".repeat(80)}\n`);
+
+        const Activity = require("../models").Activity;
+
+        const updateData: any = {
+            "details.videos": uploadedVideos,
+            "details.uploadStatus": failedVideos.length > 0 ? "partial" : "completed",
+            "details.lastUploadAttempt": new Date(),
+            $inc: { "details.uploadAttempts": 1 },
+        };
+
+        if (failedVideos.length === 0) {
+            updateData["details.isUploaded"] = true;
+        }
+
+        if (failedVideos.length > 0) {
+            updateData["details.uploadError"] = `Failed to upload ${failedVideos.length} video(s)`;
+        }
+
+        console.log(`📝 Update data:`);
+        console.log(`   Uploaded videos count: ${uploadedVideos.length}`);
+        console.log(`   Failed videos count: ${failedVideos.length}`);
+        console.log(`   Upload status: ${updateData["details.uploadStatus"]}`);
+        console.log(`   Is uploaded: ${updateData["details.isUploaded"] || false}`);
+        console.log(`   Last upload attempt: ${updateData["details.lastUploadAttempt"]}`);
+
+        console.log(`\n🔄 Executing database update...`);
+        console.log(`   Query: Activity.findByIdAndUpdate("${activityId}", ...)`);
+
+        await Activity.findByIdAndUpdate(activityId, updateData);
+
+        console.log(`   ✅ Database updated successfully\n`);
 
         const durationSeconds = ((Date.now() - startTime) / 1000).toFixed(2);
 
-        console.log(`\n${"=".repeat(80)}`);
-        console.log(`✅ UPLOAD COMPLETED SUCCESSFULLY`);
+        console.log(`${"=".repeat(80)}`);
+        if (failedVideos.length === 0) {
+            console.log(`✅ ALL UPLOADS COMPLETED SUCCESSFULLY`);
+        } else {
+            console.log(`⚠️  UPLOAD PARTIALLY COMPLETED`);
+        }
+        console.log(`${"=".repeat(80)}`);
+        console.log(`📊 Final Statistics:`);
+        console.log(`   Total videos: ${activity.details.videos.length}`);
+        console.log(`   Successfully uploaded: ${uploadedVideos.length}`);
+        console.log(`   Failed: ${failedVideos.length}`);
         console.log(`   Duration: ${durationSeconds}s`);
-        console.log(`   Activity ID: ${activityId}`);
-        console.log(`   Bunny Video ID: ${bunnyVideoId}`);
+        console.log(`   Status: ${failedVideos.length === 0 ? "COMPLETED" : "PARTIAL"}`);
+
+        if (uploadedVideos.length > 0) {
+            console.log(`\n✅ Uploaded Videos:`);
+            uploadedVideos.forEach((v, idx) => {
+                console.log(`   ${idx + 1}. Session: ${v.sessionId}`);
+                console.log(`      Bunny ID: ${v.bunnyVideoId}`);
+                console.log(`      Uploaded: ${v.uploadedAt}`);
+            });
+        }
+
+        if (failedVideos.length > 0) {
+            console.log(`\n❌ Failed Videos:`);
+            failedVideos.forEach((v, idx) => {
+                console.log(`   ${idx + 1}. Session: ${v.sessionId}`);
+                console.log(`      Error: ${v.error}`);
+            });
+        }
+
         console.log(`${"=".repeat(80)}\n`);
 
         sendResponse(res, {
-            message: "Video uploaded successfully",
+            message: failedVideos.length === 0
+                ? "All videos uploaded successfully"
+                : `${uploadedVideos.length} videos uploaded, ${failedVideos.length} failed`,
             data: {
                 activityId,
                 activityTitle: activity.title,
-                bunnyVideoId,
-                uploadStatus: "completed",
-                fileSizeMB: fileSizeMB.toFixed(2),
+                totalVideos: activity.details.videos.length,
+                uploadedCount: uploadedVideos.length,
+                failedCount: failedVideos.length,
+                uploadedVideos,
+                failedVideos,
                 durationSeconds: parseFloat(durationSeconds),
-                fileDeleted: true,
+                status: failedVideos.length === 0 ? "completed" : "partial",
             },
         });
     } catch (error: any) {
-        console.error(`\n❌ UPLOAD FAILED FOR ACTIVITY ${activityId}:`, error.message);
+        console.error(`\n${"=".repeat(80)}`);
+        console.error(`❌ CRITICAL ERROR - UPLOAD FAILED`);
+        console.error(`${"=".repeat(80)}`);
+        console.error(`📝 Error Details:`);
+        console.error(`   Activity ID: ${activityId}`);
+        console.error(`   Error Message: ${error.message}`);
+        console.error(`   Error Name: ${error.name}`);
+        console.error(`   Error Code: ${error.code || "N/A"}`);
+        console.error(`\n📚 Stack Trace:`);
+        console.error(error.stack);
+        console.error(`\n📊 Upload Progress Before Error:`);
+        console.error(`   Uploaded: ${uploadedVideos.length}`);
+        console.error(`   Failed: ${failedVideos.length}`);
+        console.error(`${"=".repeat(80)}\n`);
 
         // Update activity with error
+        console.log(`💾 Attempting to update activity with error status...`);
         try {
             await updateActivityUploadStatus(activityId, "failed", undefined, error.message);
-        } catch (updateError) {
-            console.error("Failed to update activity with error status:", updateError);
+            console.log(`   ✅ Activity status updated to 'failed'`);
+        } catch (updateError: any) {
+            console.error(`   ❌ Failed to update activity error status:`, updateError.message);
         }
-
-        // Clean up local file if exists
-        if (localFilePath) deleteLocalFile(localFilePath);
 
         const durationSeconds = ((Date.now() - startTime) / 1000).toFixed(2);
 
         console.log(`\n${"=".repeat(80)}`);
-        console.log(`❌ UPLOAD FAILED`);
+        console.log(`❌ UPLOAD PROCESS TERMINATED`);
+        console.log(`${"=".repeat(80)}`);
         console.log(`   Duration: ${durationSeconds}s`);
-        console.log(`   Error: ${error.message}`);
+        console.log(`   Final Status: FAILED`);
         console.log(`${"=".repeat(80)}\n`);
 
         throw error;
