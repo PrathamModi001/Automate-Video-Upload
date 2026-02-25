@@ -7,6 +7,7 @@ import { connectDatabase } from "./config/database";
 import { globalErrorHandler } from "./middleware/errorHandler";
 import activityRoutes from "./routes/activity.routes";
 import uploadRoutes from "./routes/upload.routes";
+import webhookRoutes from "./routes/webhook.routes";
 import { startAutoProcessor } from "./services/autoProcessor.service";
 
 const app = express();
@@ -19,6 +20,7 @@ app.use(express.urlencoded({ extended: true }));
 // Routes
 app.use("/api/activities", activityRoutes);
 app.use("/api/upload", uploadRoutes);
+app.use("/api/webhooks", webhookRoutes);
 
 // Health check
 app.get("/health", (req, res) => {
@@ -74,6 +76,7 @@ const startServer = async () => {
             console.log(`   Download Video:   http://localhost:${PORT}/api/activities/:activityId/download`);
             console.log(`   Upload Activity:  http://localhost:${PORT}/api/upload/activity/:activityId`);
             console.log(`   Process Next:     http://localhost:${PORT}/api/upload/process-next`);
+            console.log(`   Webhook (Record): http://localhost:${PORT}/api/webhooks/recording-ready`);
             console.log(`${"=".repeat(80)}\n`);
 
             // Start auto-processor if enabled
