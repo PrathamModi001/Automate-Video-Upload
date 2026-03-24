@@ -153,7 +153,7 @@ async function testConnection() {
 
         if (error.message.includes('ECONNREFUSED')) {
             console.error('\n💡 Troubleshooting:');
-            console.error('   - Make sure SSH tunnel is running (start-ssh-tunnel.bat)');
+            console.error('   - Make sure SSH tunnel is running (scripts/ssh-tunnels/start-ssh-tunnel_staging.bat)');
             console.error('   - Check port 27018 is listening: netstat -ano | findstr 27018');
         } else if (error.message.includes('Authentication failed')) {
             console.error('\n💡 Troubleshooting:');
