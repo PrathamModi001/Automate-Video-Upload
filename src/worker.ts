@@ -1,5 +1,6 @@
 import fs from "fs";
 import { config } from "./config";
+import { logger } from "./logger";
 import { fetchPending, fetchActivity, updateStatus, fetchDownloadUrls, fetchUploadConfig } from "./api";
 import { downloadVideo } from "./downloader";
 import { uploadVideo } from "./uploader";
@@ -11,56 +12,65 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function processActivity(activityId: string, title: string): Promise<void> {
-    console.log(`\n========================================`);
-    console.log(`Processing: ${title} (${activityId})`);
-    console.log(`========================================`);
+    const startTime = Date.now();
+    logger.info("Processing activity", { activityId, title });
 
     // 1. Fetch full activity details
     const activity = await fetchActivity(activityId);
 
     // Validate
     if (activity.isDeleted || activity.type !== "live_session" || !activity.roomId || !activity.isRecordingAvailable) {
-        console.log(`  Skipping: validation failed (deleted=${activity.isDeleted}, type=${activity.type}, roomId=${activity.roomId}, recording=${activity.isRecordingAvailable})`);
+        logger.warn("Activity validation failed, skipping", {
+            activityId,
+            isDeleted: activity.isDeleted,
+            type: activity.type,
+            roomId: activity.roomId,
+            isRecordingAvailable: activity.isRecordingAvailable,
+        });
         return;
     }
 
     // Check if all already uploaded
     const existingVideos = activity.videos || [];
     if (existingVideos.length > 0 && existingVideos.every(v => v.bunnyVideoId)) {
-        console.log(`  All videos already uploaded, marking completed`);
+        logger.info("All videos already uploaded, marking completed", { activityId, videoCount: existingVideos.length });
         await updateStatus(activityId, { status: "completed" });
         return;
     }
 
     // 2. DOWNLOAD PHASE
-    const needsDownload = existingVideos.length === 0 || existingVideos.some(v => !v.bunnyVideoId && !v.localFilePath);
+    const needsDownload = existingVideos.length === 0 || existingVideos.some(v => {
+        if (v.bunnyVideoId) return false;
+        if (!v.localFilePath) return true;
+        return !fs.existsSync(v.localFilePath);
+    });
     let videosToUpload = existingVideos;
 
     if (needsDownload) {
-        console.log(`  [phase] Downloading recordings from 100ms...`);
+        logger.info("Download phase started", { activityId });
         await updateStatus(activityId, { status: "downloading" });
 
         const downloadVideos = await fetchDownloadUrls(activityId);
         if (downloadVideos.length === 0) {
-            console.log(`  No videos found for download`);
+            logger.error("No videos found for download", { activityId });
             await updateStatus(activityId, { status: "failed", error: "No video recordings found in 100ms" });
             return;
         }
 
-        console.log(`  Found ${downloadVideos.length} video(s) to download`);
+        logger.info("Videos to download", { activityId, count: downloadVideos.length });
         const downloadedVideos: any[] = [];
 
         for (const video of downloadVideos) {
             const existing = existingVideos.find(v => v.assetId === video.assetId && v.bunnyVideoId);
             if (existing) {
-                console.log(`  Skipping download for asset ${video.assetId} (already uploaded)`);
+                logger.info("Skipping download, already uploaded", { activityId, assetId: video.assetId });
                 downloadedVideos.push(existing);
                 continue;
             }
 
             const existingWithPath = existingVideos.find(v => v.assetId === video.assetId && v.localFilePath);
             if (existingWithPath && fs.existsSync(existingWithPath.localFilePath!)) {
-                console.log(`  Skipping download for asset ${video.assetId} (file exists on disk)`);
+                logger.info("Skipping download, file exists on disk", { activityId, assetId: video.assetId });
                 downloadedVideos.push(existingWithPath);
                 continue;
             }
@@ -72,7 +82,7 @@ async function processActivity(activityId: string, title: string): Promise<void>
                     localFilePath: localPath, duration: video.duration, size: video.size,
                 });
             } catch (err: any) {
-                console.error(`  Failed to download asset ${video.assetId}: ${err.message}`);
+                logger.error("Download failed", { activityId, assetId: video.assetId, error: err.message });
                 await updateStatus(activityId, { status: "failed", error: `Download failed for asset ${video.assetId}: ${err.message}` });
                 return;
             }
@@ -83,7 +93,7 @@ async function processActivity(activityId: string, title: string): Promise<void>
     }
 
     // 3. UPLOAD PHASE
-    console.log(`  [phase] Uploading to Bunny Stream...`);
+    logger.info("Upload phase started", { activityId, videoCount: videosToUpload.length });
     await updateStatus(activityId, { status: "uploading" });
 
     let uploadedCount = 0;
@@ -93,13 +103,13 @@ async function processActivity(activityId: string, title: string): Promise<void>
         const video = videosToUpload[i];
 
         if (video.bunnyVideoId) {
-            console.log(`  Skipping upload for video ${i} (already has bunnyVideoId)`);
+            logger.info("Skipping upload, already has bunnyVideoId", { activityId, videoIndex: i, bunnyVideoId: video.bunnyVideoId });
             uploadedCount++;
             continue;
         }
 
         if (!video.localFilePath || !fs.existsSync(video.localFilePath)) {
-            console.error(`  No local file for video ${i}, skipping`);
+            logger.error("No local file for video, skipping", { activityId, videoIndex: i, localFilePath: video.localFilePath });
             failedCount++;
             continue;
         }
@@ -110,32 +120,42 @@ async function processActivity(activityId: string, title: string): Promise<void>
             await uploadVideo(video.localFilePath, uploadConfig);
             await updateStatus(activityId, { status: "video-uploaded", videoIndex: i, bunnyVideoId: uploadConfig.bunnyVideoId });
 
-            try { fs.unlinkSync(video.localFilePath); console.log(`  [cleanup] Deleted local file`); } catch {}
+            try {
+                fs.unlinkSync(video.localFilePath);
+                logger.info("Local file deleted", { activityId, videoIndex: i });
+            } catch {}
             uploadedCount++;
         } catch (err: any) {
-            console.error(`  Failed to upload video ${i}: ${err.message}`);
+            logger.error("Upload failed for video", { activityId, videoIndex: i, error: err.message });
             failedCount++;
         }
     }
 
     // 4. Final status
+    const durationMs = Date.now() - startTime;
     if (failedCount === 0) {
         await updateStatus(activityId, { status: "completed" });
-        console.log(`  All ${uploadedCount} video(s) uploaded successfully`);
+        logger.info("Activity completed", { activityId, uploadedCount, durationMs });
     } else if (uploadedCount > 0) {
         await updateStatus(activityId, { status: "partial", error: `Failed to upload ${failedCount} video(s)` });
+        logger.warn("Activity partially completed", { activityId, uploadedCount, failedCount, durationMs });
     } else {
         await updateStatus(activityId, { status: "failed", error: `All ${failedCount} video(s) failed to upload` });
+        logger.error("Activity failed", { activityId, failedCount, durationMs });
     }
 }
 
 async function main(): Promise<void> {
-    console.log("Video Worker started");
-    console.log(`  LMS API: ${config.lmsApiUrl}`);
-    console.log(`  Poll interval: ${config.pollInterval}ms`);
-    console.log(`  Temp dir: ${config.tempDir}`);
+    logger.info("Video Worker started", {
+        lmsApiUrl: config.lmsApiUrl,
+        pollInterval: config.pollInterval,
+        tempDir: config.tempDir,
+    });
 
-    if (!config.apiKey) { console.error("ERROR: API_KEY not set"); process.exit(1); }
+    if (!config.apiKey) {
+        logger.error("API_KEY not set in environment");
+        process.exit(1);
+    }
     if (!fs.existsSync(config.tempDir)) fs.mkdirSync(config.tempDir, { recursive: true });
 
     while (true) {
@@ -143,7 +163,7 @@ async function main(): Promise<void> {
             const pending = await fetchPending();
 
             if (!pending.hasWork) {
-                console.log(`[${new Date().toISOString()}] No pending work, sleeping ${config.pollInterval}ms`);
+                logger.debug("No pending work", { sleepMs: config.pollInterval });
                 await sleep(config.pollInterval);
                 continue;
             }
@@ -151,7 +171,7 @@ async function main(): Promise<void> {
             const { activityId, title } = pending;
 
             if (processing.has(activityId!)) {
-                console.log(`  Skipping ${activityId} (already in processing set)`);
+                logger.warn("Activity already in processing set, skipping", { activityId });
                 await sleep(config.pollInterval);
                 continue;
             }
@@ -164,7 +184,7 @@ async function main(): Promise<void> {
             }
             // Immediately check for next job — no sleep
         } catch (err: any) {
-            console.error(`[${new Date().toISOString()}] Loop error: ${err.message}`);
+            logger.error("Main loop error", { error: err.message, stack: err.stack });
             await sleep(config.pollInterval);
         }
     }

@@ -1,14 +1,21 @@
 import fs from "fs";
 import * as tus from "tus-js-client";
 import type { UploadConfigResult } from "./api";
+import { logger } from "./logger";
 
 export function uploadVideo(filePath: string, tusConfig: UploadConfigResult): Promise<void> {
     return new Promise((resolve, reject) => {
         const fileStream = fs.createReadStream(filePath);
         const fileSize = fs.statSync(filePath).size;
         const fileName = filePath.split(/[/\\]/).pop() || "video.mp4";
+        const sizeMB = +(fileSize / 1024 / 1024).toFixed(2);
 
-        console.log(`  [upload] Starting TUS upload: ${fileName} (${(fileSize / 1024 / 1024).toFixed(1)}MB)`);
+        logger.info("TUS upload starting", {
+            fileName,
+            sizeMB,
+            bunnyVideoId: tusConfig.bunnyVideoId,
+            chunks: Math.ceil(fileSize / (50 * 1024 * 1024)),
+        });
 
         const upload = new tus.Upload(fileStream, {
             endpoint: tusConfig.tusEndpoint,
@@ -23,17 +30,18 @@ export function uploadVideo(filePath: string, tusConfig: UploadConfigResult): Pr
             },
             uploadSize: fileSize,
             onError(err) {
-                console.error(`\n  [upload] Failed: ${err.message}`);
+                logger.error("TUS upload failed", { fileName, error: err.message });
                 reject(err);
             },
             onProgress(bytesUploaded, bytesTotal) {
                 const pct = ((bytesUploaded / bytesTotal) * 100).toFixed(1);
                 const mb = (bytesUploaded / 1024 / 1024).toFixed(1);
                 const totalMb = (bytesTotal / 1024 / 1024).toFixed(1);
-                process.stdout.write(`\r  [upload] ${mb}MB / ${totalMb}MB (${pct}%)`);
+                logger.progress(`  [upload] ${mb}MB / ${totalMb}MB (${pct}%)`);
             },
             onSuccess() {
-                console.log(`\n  [upload] Complete: ${fileName}`);
+                logger.progressEnd();
+                logger.info("TUS upload complete", { fileName, sizeMB, bunnyVideoId: tusConfig.bunnyVideoId });
                 resolve();
             },
         });

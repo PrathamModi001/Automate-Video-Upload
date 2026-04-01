@@ -1,7 +1,5 @@
-// HTTP client wrapper — all communication with LMS-BE goes through here
-// Endpoints: GET /pending, GET /activity/:id, PATCH /status/:id, POST /upload-config/:id
-
 import { config } from "./config";
+import { logger } from "./logger";
 
 interface ApiResponse<T> { success: boolean; statusCode: number; message: string; data?: T; }
 
@@ -31,44 +29,49 @@ export interface DownloadVideo {
     duration: number; size: number;
 }
 
-async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
-    const res = await fetch(url, {
-        ...options,
-        headers: { "x-api-key": config.apiKey, "Content-Type": "application/json", ...(options.headers as Record<string,string>) },
-    });
+async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
+    const options: RequestInit = {
+        method,
+        headers: { "x-api-key": config.apiKey, "Content-Type": "application/json" },
+    };
+    if (body) options.body = JSON.stringify(body);
+
+    logger.debug("API request", { method, url });
+
+    const res = await fetch(url, options);
+
     if (!res.ok) {
-        const body = await res.text();
-        throw new Error(`API ${res.status} ${res.statusText}: ${body}`);
+        const text = await res.text();
+        logger.error("API request failed", { method, url, status: res.status, response: text });
+        throw new Error(`API ${res.status} ${res.statusText}: ${text}`);
     }
+
     return res.json() as Promise<T>;
 }
 
 export async function fetchPending(): Promise<PendingResult> {
-    const res = await request<ApiResponse<PendingResult>>(`${config.lmsApiUrl}/v1/video-worker/pending`);
+    const res = await request<ApiResponse<PendingResult>>("GET", `${config.lmsApiUrl}/v1/video-worker/pending`);
     return res.data!;
 }
 
 export async function fetchActivity(activityId: string): Promise<ActivityResult> {
-    const res = await request<ApiResponse<ActivityResult>>(`${config.lmsApiUrl}/v1/video-worker/activity/${activityId}`);
+    const res = await request<ApiResponse<ActivityResult>>("GET", `${config.lmsApiUrl}/v1/video-worker/activity/${activityId}`);
     return res.data!;
 }
 
 export async function updateStatus(activityId: string, body: Record<string, unknown>): Promise<void> {
-    await request<ApiResponse<void>>(`${config.lmsApiUrl}/v1/video-worker/status/${activityId}`, {
-        method: "PATCH",
-        body: JSON.stringify(body),
-    });
+    logger.info("Status update", { activityId, ...body });
+    await request<ApiResponse<void>>("PATCH", `${config.lmsApiUrl}/v1/video-worker/status/${activityId}`, body);
 }
 
 export async function fetchUploadConfig(activityId: string, title: string, videoIndex: number): Promise<UploadConfigResult> {
-    const res = await request<ApiResponse<UploadConfigResult>>(`${config.lmsApiUrl}/v1/video-worker/upload-config/${activityId}`, {
-        method: "POST",
-        body: JSON.stringify({ title, videoIndex }),
-    });
+    const res = await request<ApiResponse<UploadConfigResult>>("POST", `${config.lmsApiUrl}/v1/video-worker/upload-config/${activityId}`, { title, videoIndex });
+    logger.info("Upload config received", { activityId, videoIndex, bunnyVideoId: res.data!.bunnyVideoId });
     return res.data!;
 }
 
 export async function fetchDownloadUrls(activityId: string): Promise<DownloadVideo[]> {
-    const res = await request<{ success: boolean; videos: DownloadVideo[] }>(`${config.lmsApiUrl}/v1/100ms/recordings/activity/${activityId}/videos`);
+    const res = await request<{ success: boolean; videos: DownloadVideo[] }>("GET", `${config.lmsApiUrl}/v1/100ms/recordings/activity/${activityId}/videos`);
+    logger.info("Download URLs fetched", { activityId, videoCount: res.videos.length });
     return res.videos;
 }

@@ -1,18 +1,18 @@
 import fs from "fs";
 import path from "path";
 import { config } from "./config";
+import { logger } from "./logger";
 
 export async function downloadVideo(
     downloadUrl: string, activityId: string, sessionId: string, assetId: string
 ): Promise<string> {
-    // Ensure temp dir exists
     if (!fs.existsSync(config.tempDir)) fs.mkdirSync(config.tempDir, { recursive: true });
 
     const timestamp = Date.now();
     const fileName = `${activityId}_${sessionId}_${assetId}_${timestamp}.mp4`;
     const filePath = path.join(config.tempDir, fileName);
 
-    console.log(`  [download] Starting: ${fileName}`);
+    logger.info("Download starting", { activityId, sessionId, assetId, fileName });
 
     const response = await fetch(downloadUrl);
     if (!response.ok) throw new Error(`Download failed: ${response.status} ${response.statusText}`);
@@ -33,7 +33,7 @@ export async function downloadVideo(
                 const pct = ((downloaded / totalSize) * 100).toFixed(1);
                 const mb = (downloaded / 1024 / 1024).toFixed(1);
                 const totalMb = (totalSize / 1024 / 1024).toFixed(1);
-                process.stdout.write(`\r  [download] ${mb}MB / ${totalMb}MB (${pct}%)`);
+                logger.progress(`  [download] ${mb}MB / ${totalMb}MB (${pct}%)`);
             }
         }
     } finally {
@@ -45,6 +45,8 @@ export async function downloadVideo(
         fileStream.on("error", reject);
     });
 
-    console.log(`\n  [download] Complete: ${fileName} (${(downloaded / 1024 / 1024).toFixed(1)}MB)`);
+    logger.progressEnd();
+    const sizeMB = +(downloaded / 1024 / 1024).toFixed(2);
+    logger.info("Download complete", { activityId, sessionId, assetId, fileName, sizeMB });
     return filePath;
 }
