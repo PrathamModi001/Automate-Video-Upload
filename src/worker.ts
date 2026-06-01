@@ -1,4 +1,5 @@
 import fs from "fs";
+import path from "path";
 import { config } from "./config";
 import { logger } from "./logger";
 import { fetchPending, fetchActivity, updateStatus, fetchDownloadUrls, fetchUploadConfig } from "./api";
@@ -121,6 +122,27 @@ async function processActivity(activityId: string, title: string): Promise<void>
             await updateStatus(activityId, { status: "video-uploaded", videoIndex: i, bunnyVideoId: uploadConfig.bunnyVideoId });
 
             try {
+                const sanitizedTitle = activity.title.replace(/[\\/:*?"<>|]/g, "_");
+                const backupFileName = `${sanitizedTitle}_Part_${i + 1}_${video.assetId}.mp4`;
+                const backupPath = path.join(config.backupDir, backupFileName);
+                
+                logger.info("Backing up local video to backup directory", { 
+                    activityId, 
+                    videoIndex: i, 
+                    backupPath 
+                });
+                
+                fs.copyFileSync(video.localFilePath, backupPath);
+                logger.info("Video backup complete", { backupPath });
+            } catch (backupErr: any) {
+                logger.error("Failed to backup video", { 
+                    activityId, 
+                    videoIndex: i, 
+                    error: backupErr.message 
+                });
+            }
+
+            try {
                 fs.unlinkSync(video.localFilePath);
                 logger.info("Local file deleted", { activityId, videoIndex: i });
             } catch {}
@@ -150,6 +172,7 @@ async function main(): Promise<void> {
         lmsApiUrl: config.lmsApiUrl,
         pollInterval: config.pollInterval,
         tempDir: config.tempDir,
+        backupDir: config.backupDir,
     });
 
     if (!config.apiKey) {
@@ -157,6 +180,7 @@ async function main(): Promise<void> {
         process.exit(1);
     }
     if (!fs.existsSync(config.tempDir)) fs.mkdirSync(config.tempDir, { recursive: true });
+    if (!fs.existsSync(config.backupDir)) fs.mkdirSync(config.backupDir, { recursive: true });
 
     while (true) {
         try {

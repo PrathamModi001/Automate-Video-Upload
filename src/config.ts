@@ -8,4 +8,5 @@ export const config = {
     apiKey: process.env.API_KEY || "",
     pollInterval: parseInt(process.env.POLL_INTERVAL || "60000", 10),
     tempDir: path.resolve(process.env.TEMP_DIR || "./uploads"),
+    backupDir: path.resolve(process.env.BACKUP_DIR || "./backup_videos"),
 };
