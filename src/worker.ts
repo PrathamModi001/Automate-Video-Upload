@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { config } from "./config";
 import { logger } from "./logger";
-import { fetchPending, fetchActivity, updateStatus, fetchDownloadUrls, fetchUploadConfig } from "./api";
+import { fetchPending, fetchActivity, updateStatus, fetchDownloadUrls, fetchUploadConfig, triggerRecordingSync } from "./api";
 import { downloadVideo } from "./downloader";
 import { uploadVideo } from "./uploader";
 
@@ -167,6 +167,16 @@ async function processActivity(activityId: string, title: string): Promise<void>
     }
 }
 
+async function runPeriodicSync(): Promise<void> {
+    logger.info("Starting periodic sync of recording availability...");
+    try {
+        const result = await triggerRecordingSync();
+        logger.info("Periodic recording sync completed successfully", { result });
+    } catch (err: any) {
+        logger.error("Periodic recording sync failed", { error: err.message });
+    }
+}
+
 async function main(): Promise<void> {
     logger.info("Video Worker started", {
         lmsApiUrl: config.lmsApiUrl,
@@ -181,6 +191,12 @@ async function main(): Promise<void> {
     }
     if (!fs.existsSync(config.tempDir)) fs.mkdirSync(config.tempDir, { recursive: true });
     if (!fs.existsSync(config.backupDir)) fs.mkdirSync(config.backupDir, { recursive: true });
+
+    // Run sync immediately on startup
+    runPeriodicSync();
+
+    // Run sync every 4 hours (4 * 60 * 60 * 1000 ms = 14400000 ms)
+    setInterval(runPeriodicSync, 14400000);
 
     while (true) {
         try {
@@ -206,7 +222,8 @@ async function main(): Promise<void> {
             } finally {
                 processing.delete(activityId!);
             }
-            // Immediately check for next job — no sleep
+            logger.info("Finished processing activity. Sleeping 5s before next check.", { activityId });
+            await sleep(5000);
         } catch (err: any) {
             logger.error("Main loop error", { error: err.message, stack: err.stack });
             await sleep(config.pollInterval);

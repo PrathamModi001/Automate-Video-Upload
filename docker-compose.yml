@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  video-worker:
+    build: .
+    container_name: video-upload-worker
+    restart: unless-stopped
+    # Load all environment variables from the .env file in the same directory
+    env_file:
+      - .env
+    # Map the relative uploads and backups directories to the host disk
+    volumes:
+      - ./uploads:/app/uploads
+      - ./backup_videos:/app/backup_videos
