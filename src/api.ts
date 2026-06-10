@@ -76,6 +76,8 @@ export async function fetchDownloadUrls(activityId: string): Promise<DownloadVid
     return res.videos;
 }
 
+
+
 export async function triggerRecordingSync(): Promise<any> {
     return request<any>("GET", `${config.lmsApiUrl}/v1/video-worker/sync-recordings`);
 }
