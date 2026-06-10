@@ -1,0 +1,109 @@
+// Load environment variables FIRST (before any other imports)
+import dotenv from "dotenv";
+dotenv.config();
+
+import express from "express";
+import { connectDatabase } from "./config/database";
+import { globalErrorHandler } from "./middleware/errorHandler";
+import activityRoutes from "./routes/activity.routes";
+import uploadRoutes from "./routes/upload.routes";
+import webhookRoutes from "./routes/webhook.routes";
+import { startAutoProcessor } from "./services/autoProcessor.service";
+
+const app = express();
+const PORT = process.env.PORT || 4000;
+
+// Middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Routes
+app.use("/api/activities", activityRoutes);
+app.use("/api/upload", uploadRoutes);
+app.use("/api/webhooks", webhookRoutes);
+
+// Health check
+app.get("/health", (req, res) => {
+    res.json({
+        status: "OK",
+        message: "Video Upload Server is running",
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+    });
+});
+
+// Root endpoint
+app.get("/", (req, res) => {
+    res.json({
+        name: "Video Upload Server",
+        version: "1.0.0",
+        description: "Automated 100ms to Bunny Stream video upload service",
+        endpoints: {
+            health: "GET /health",
+            pendingUploads: "GET /api/activities/pending-uploads",
+            downloadVideo: "POST /api/activities/:activityId/download",
+            uploadActivity: "POST /api/upload/activity/:activityId",
+            processNext: "POST /api/upload/process-next",
+        },
+    });
+});
+
+// Global error handler (matches main backend)
+app.use(globalErrorHandler);
+
+// Connect to database and start server
+const startServer = async () => {
+    try {
+        // Connect to MongoDB
+        await connectDatabase();
+
+        // Start server
+        app.listen(PORT, () => {
+            const uploadDir = process.env.TEMP_UPLOAD_DIR
+                ? require("path").resolve(process.env.TEMP_UPLOAD_DIR)
+                : require("path").join(process.cwd(), "uploads");
+
+            console.log(`\n${"=".repeat(80)}`);
+            console.log(`🚀 Video Upload Server started successfully`);
+            console.log(`   Port: ${PORT}`);
+            console.log(`   Environment: ${process.env.NODE_ENV}`);
+            console.log(`   MongoDB: Connected`);
+            console.log(`   Bunny Stream: ${process.env.IS_BUNNY_ENABLED === "true" ? "Enabled" : "Disabled"}`);
+            console.log(`   📁 Upload Directory: ${uploadDir}`);
+            console.log(`\n📡 API Endpoints:`);
+            console.log(`   Health Check:     http://localhost:${PORT}/health`);
+            console.log(`   Pending Uploads:  http://localhost:${PORT}/api/activities/pending-uploads`);
+            console.log(`   Download Video:   http://localhost:${PORT}/api/activities/:activityId/download`);
+            console.log(`   Upload Activity:  http://localhost:${PORT}/api/upload/activity/:activityId`);
+            console.log(`   Process Next:     http://localhost:${PORT}/api/upload/process-next`);
+            console.log(`   Webhook (Record): http://localhost:${PORT}/api/webhooks/recording-ready`);
+            console.log(`${"=".repeat(80)}\n`);
+
+            // Start auto-processor if enabled
+            if (process.env.AUTO_PROCESS === "true") {
+                startAutoProcessor();
+            } else {
+                console.log(`ℹ️  Auto-processor disabled (set AUTO_PROCESS=true to enable)\n`);
+            }
+        });
+    } catch (error) {
+        console.error("❌ Failed to start server:", error);
+        process.exit(1);
+    }
+};
+
+// Graceful shutdown
+process.on("SIGINT", () => {
+    console.log("\n🛑 Shutting down gracefully...");
+    process.exit(0);
+});
+
+process.on("SIGTERM", () => {
+    console.log("\n🛑 Shutting down gracefully...");
+    process.exit(0);
+});
+
+// Start the server
+startServer();
+
+export default app;
